@@ -10,7 +10,7 @@ import "./interfaces/IVRFCandleAuctionErrors.sol";
 import "./interfaces/IRandomNumberGenerator.sol";
 
 
-contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
+contract VRFCandleAuctionCustomDistributions is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
     using SafeTransferLib for address;
 
     /*//////////////////////////////////////////////////////////////
@@ -28,8 +28,10 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
     /// @param possibleTerminationPeriod Number of blocks after the no termination period where sudden termination is possible 
     /// @param highestBid The current highest bid
     /// @param auctionSettled An auction has ended an user's are now able to withdrawl funds
+    /// @param blocksPerPeriod Number of blocks per probablity distribution period
+    /// @param flipsPerPeriod Specified number of coin flips per period
+    /// @dev possibleTerminationPeriod should be the product of flipsPerPeriod length and number of periods
     struct Auction {
-
         address tokenContract;
         uint256 tokenId;
         /*///////////////////*/
@@ -42,6 +44,9 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
         uint256 highestBid;
         /*///////////////////*/
         bool auctionSettled;
+        /*///////////////////*/
+        uint32 blocksPerPeriod;
+        uint32[] flipsPerPeriod;
     }
 
     /// @notice HighestBidder struct for a specified block
@@ -52,7 +57,7 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
         uint32 blockNumber;
         address bidder;
         uint256 bid;
-    }
+    }   
 
     /// @notice Internally used ID system to track auctions
     uint256 uid; 
@@ -62,6 +67,13 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
     mapping(uint256 => mapping(address => uint256)) public Bids;
 
     mapping(uint256 => HighestBidder[]) public HighestBidPerPeriod;
+
+   
+    /*//////////////////////////////////////////////////////////////
+                                 Errors
+    //////////////////////////////////////////////////////////////*/
+    
+    error InvalidFlipsInitialization();
 
     /*//////////////////////////////////////////////////////////////
                                  EVENTS
@@ -80,7 +92,9 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
         uint32 noTerminationBiddingPeriod,
         uint32 possibleTerminationPeriod,
         uint256 reservePrice,
-        uint256 uid
+        uint256 uid,
+        uint32 blocksPerPeriod,
+        uint32[] flipsPerPeriod
     );
 
     event AuctionEnded (
@@ -92,8 +106,8 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
     /*//////////////////////////////////////////////////////////////
                                  FUNCTIONS
     //////////////////////////////////////////////////////////////*/
- 
-    constructor(address randomNumberGeneratorAddress) Owned(msg.sender) {
+
+    constructor(  address randomNumberGeneratorAddress ) Owned(msg.sender) {
         randomGenerator = IRandomNumberGenerator(randomNumberGeneratorAddress);
     }
 
@@ -105,13 +119,27 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
         uint32 _startingBlock,
         uint32 _noTerminationBiddingPeriod,
         uint32 _possibleTerminationBiddingPeriod,
-        uint256 reservePrice
+        uint256 reservePrice,
+        uint32 _blocksPerPeriod,
+        uint32[] memory _flipsPerPeriod
     ) external nonReentrant returns (uint256) {
+        
+        // Require that possibleTerminationPeriod is the product of flipsPerPeriod length and number of blocks per period
+        if (_flipsPerPeriod.length != _possibleTerminationBiddingPeriod / _blocksPerPeriod) {
+            revert InvalidFlipsInitialization();
+        }
+        
+        // Require that flipsPerPeriod is non-zero
+        for (uint i =0; i < _flipsPerPeriod.length; i++) {
+            if (_flipsPerPeriod[i] == 0) {
+                revert InvalidFlipsInitialization();
+            }
+        }
         // Next UID
         uid++;
 
         Auction storage auction = Auctions[uid]; 
-        // If no starting block is set, set at current block number
+         // If no starting block is set, set at current block number
         if (_startingBlock == 0) {
             auction.startingBlock = uint32(block.number);
         // block number must be for the present or a future block
@@ -123,6 +151,7 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
         if (_noTerminationBiddingPeriod < 18000) {
             revert InvalidNoTerminationBiddingPeriod(_noTerminationBiddingPeriod);
         }
+
         // Possible termination period must be atleast 18000 blocks or ~ 60 minutes
         if (_possibleTerminationBiddingPeriod < 18000) {
             revert InvalidPossibleTerminationBiddingPeriod(_possibleTerminationBiddingPeriod);
@@ -137,24 +166,30 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
         auction.possibleTerminationPeriod = _possibleTerminationBiddingPeriod;
         auction.highestBid = reservePrice; 
         auction.auctionSettled = false;
+        auction.blocksPerPeriod = _blocksPerPeriod;
+        auction.flipsPerPeriod = _flipsPerPeriod;
 
         // Set auction seller as the default highest bidder
         HighestBidder[] storage highestBidder = HighestBidPerPeriod[uid];
         highestBidder.push(HighestBidder(uint32(block.number), msg.sender, reservePrice));
         
-        // Send ERC721 to this address
+         // Send ERC721 to this address
         ERC721(auction.tokenContract).transferFrom(msg.sender, address(this), auction.tokenId);
+        
         // Event Emit
         emit AuctionCreated(
             _tokenContract, 
-            _tokenId, msg.sender,
-             _startingBlock, 
-             _noTerminationBiddingPeriod, 
-             _possibleTerminationBiddingPeriod, 
-             reservePrice, 
-             uid
+            _tokenId,
+            msg.sender, 
+            _startingBlock,
+            _noTerminationBiddingPeriod, 
+            _possibleTerminationBiddingPeriod, 
+            reservePrice, 
+            uid, 
+            _blocksPerPeriod,
+            _flipsPerPeriod
             );
-
+        
         return uid;
     }
 
@@ -164,10 +199,10 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
     function bid(
         uint256 _uid
     ) external payable nonReentrant {
-       // Check that UID is a valid id
+        // Check that UID is a valid id
         if (_uid == 0 || _uid > uid) {
             revert InvalidUID();
-        } 
+        }
        Auction storage auction = Auctions[_uid];
 
        uint256 currentBid = 0;
@@ -177,7 +212,7 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
        } else {
         currentBid = msg.value;
        }
-       // A bid must take place during the specified auction period
+        // A bid must take place during the specified auction period
        if (block.number > auction.startingBlock + auction.noTerminationBiddingPeriod +  auction.possibleTerminationPeriod) {
             revert InvalidBidTime();
        }
@@ -186,8 +221,8 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
             revert BidTooLow(auction.highestBid);
        }
        auction.highestBid = msg.value;
-       
-       // Keeps track of a user's total amount bid
+    
+        // Keeps track of a user's total amount bid
        if (Bids[_uid][msg.sender] != 0) {
             Bids[_uid][msg.sender] = Bids[_uid][msg.sender] + msg.value;
        } else {
@@ -203,7 +238,7 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
         } else {
             highestBidder.push(HighestBidder(uint32(block.number), msg.sender, msg.value));
         }
-        // Emit event
+        // Emit Event
         emit HighestBid(msg.sender, msg.value);
     }
 
@@ -220,7 +255,9 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
         if (block.number <= (auction.startingBlock + auction.noTerminationBiddingPeriod + auction.possibleTerminationPeriod)) {
             revert InvalidAuctionInProccess();
         }
+
         randomGenerator.requestRandom();
+
     }
 
     /// @notice Settles Auctions and transfer ERC721 to the highest bidder
@@ -232,26 +269,39 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
         if (_uid == 0 || _uid > uid) {
             revert InvalidUID();
         }
-        Auction storage auction = Auctions[_uid];
+         Auction storage auction = Auctions[_uid];
         // Check that the auction is over
         if (block.number <= (auction.startingBlock + auction.noTerminationBiddingPeriod + auction.possibleTerminationPeriod)) {
             revert InvalidAuctionInProccess();
         }
 
-        // Calculates the block that the auction ended on
-        uint32 blockWithinPossibleTerminationPeriod = uint32( randomGenerator.getRandom() % auction.possibleTerminationPeriod);
-        uint32 chosenEndBlock = auction.startingBlock + auction.noTerminationBiddingPeriod + blockWithinPossibleTerminationPeriod;
+        uint256 randomNumber = randomGenerator.getRandom();
+
+        uint32 blockIndexWithinPossibleTerminationPeriod = uint32(auction.flipsPerPeriod.length);
+        for (uint32 index = 0; index < auction.flipsPerPeriod.length; index++) {
+            uint256 mask = (1 << auction.flipsPerPeriod[index]) - 1;
+            uint maskedResult = randomNumber & mask;
+
+            if (maskedResult == mask) {
+                blockIndexWithinPossibleTerminationPeriod = index;
+                break;
+            }
+        }
+       
+        uint32 chosenEndBlock = auction.startingBlock + auction.noTerminationBiddingPeriod + (blockIndexWithinPossibleTerminationPeriod * auction.blocksPerPeriod);
+
         HighestBidder[] storage highestBidder = HighestBidPerPeriod[_uid];
 
         // Checks for the highest bid at the time the auction ended
         uint32  winningPeriodIndex;
         for (uint32 i = uint32(highestBidder.length -1); i >= 0; i--) {
+            
             if (highestBidder[i].blockNumber < chosenEndBlock) {
                 winningPeriodIndex = i;
-                 break;
+                break;
             } 
-           
         }
+
         address winningBidder = highestBidder[winningPeriodIndex].bidder;
         uint256 winningBid = highestBidder[winningPeriodIndex].bid;
         // Sets highest bidder bid to 0
@@ -259,12 +309,14 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
         auction.auctionSettled = true;
         // Sends ERC721 to winning bidder
         ERC721(auction.tokenContract).transferFrom(address(this),  winningBidder, auction.tokenId);
-        // Sends highest bid to the seller
+         // Sends highest bid to the seller
+
         if (winningBidder != auction.seller) {
             auction.seller.safeTransferETH(winningBid);
         }
         // Emit Event
         emit AuctionEnded(highestBidder[winningPeriodIndex].blockNumber, winningBidder, highestBidder[winningPeriodIndex].bid);
+
     }
 
     /// @notice Allows losing bidders to withdrawl their bid
@@ -281,7 +333,7 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
         if (block.number <= (auction.startingBlock + auction.noTerminationBiddingPeriod + auction.possibleTerminationPeriod)) {
             revert InvalidAuctionInProccess();
         }
-        // Check that the auction has been settled
+         // Check that the auction has been settled
         if (auction.auctionSettled != true) {
             revert InvalidAuctionInProccess();
         }
@@ -290,5 +342,10 @@ contract VRFCandleAuction is IVRFCandleAuctionErrors, ReentrancyGuard, Owned {
         Bids[uid][msg.sender] = 0;
 
         msg.sender.safeTransferETH(amountToReturn);
+        
     }
+
+     
+
+   
 }

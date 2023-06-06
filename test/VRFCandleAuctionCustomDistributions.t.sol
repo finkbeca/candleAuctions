@@ -2,7 +2,7 @@
 pragma solidity ^0.8.13;
 
 //import "forge-std/Test.sol";
-import "../src/VRFCandleAuction.sol";
+import "../src/VRFCandleAuctionCustomDistributions.sol";
 import "../src/interfaces/IVRFCandleAuctionErrors.sol";
 import "../src/interfaces/IRandomNumberGenerator.sol";
 import "../src/RandomNumberGenerator.sol";
@@ -12,11 +12,11 @@ import "./utils/TestActors.sol";
 import "./utils/TestERC721.sol";
 
 
-contract VRFCandleAuctionTest is IVRFCandleAuctionErrors, TestActors {
+contract VRFCandleAuctionCustomDistributionsTest is IVRFCandleAuctionErrors, TestActors {
     
     LinkToken public linkToken;
     MockVRFCoordinatorV2 public vrfCoordinator;
-    VRFCandleAuction public candleAuction;
+    VRFCandleAuctionCustomDistributions public candleAuction;
     RandomNumberGenerator public randomGenerator;
     TestERC721 public erc721;
     
@@ -43,7 +43,7 @@ contract VRFCandleAuctionTest is IVRFCandleAuctionErrors, TestActors {
             keyHash
         );
         hoax(jim);
-        candleAuction = new VRFCandleAuction(
+        candleAuction = new VRFCandleAuctionCustomDistributions(
             address(randomGenerator)
         );
 
@@ -242,7 +242,14 @@ contract VRFCandleAuctionTest is IVRFCandleAuctionErrors, TestActors {
 
     function createAuction(uint32 tokenId) public returns (uint256) {
         hoax(alice);
-        return candleAuction.createAuction(address(erc721), tokenId, uint32(block.number + 100), 20000, 20000, .5 ether);
+
+        uint32[] memory flipsPerPeriod = new uint32[](4);
+        flipsPerPeriod[0] = 4;
+        flipsPerPeriod[1] = 3;
+        flipsPerPeriod[2] = 2;
+        flipsPerPeriod[3] = 1;
+
+        return candleAuction.createAuction(address(erc721), tokenId, uint32(block.number + 100), 20000, 20000, .5 ether, 5000, flipsPerPeriod );
         
     }
 

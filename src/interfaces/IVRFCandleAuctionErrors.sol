@@ -5,6 +5,7 @@ interface IVRFCandleAuctionErrors {
     error InvalidAuctionInProccess();
     error BidTooLow(uint256 previousHighestBid);
     error InvalidSeller();
+    error InvalidUID();
     error InvalidStartTime(uint32 startTime);
     error InvalidNoTerminationBiddingPeriod(uint32 biddingPeriod);
     error InvalidPossibleTerminationBiddingPeriod(uint32 biddingPeriod);
