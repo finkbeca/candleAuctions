@@ -22,7 +22,9 @@ Sudden Termination (or Candle) is a solidity implementation of a single-item (ER
 ---
 Require Foundry.
 
-Install: ``` forge install ```  
+Install: ``` forge install ``` 
+
 Build: ``` forge build ```   
+
 Test: ``` forge test ```  
 
